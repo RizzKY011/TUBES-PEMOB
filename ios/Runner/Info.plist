@@ -45,5 +45,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Akses kamera dibutuhkan untuk memfoto struk dan memprosesnya otomatis.</string>
 </dict>
 </plist>

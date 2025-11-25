@@ -1,19 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'models.dart';
-import 'payment_helper.dart';
-import 'repository.dart';
-import 'package:csv/csv.dart';
 import '../../core/ocr/receipt_scanner.dart';
-import '../debt/repository.dart';
-import '../debt/models.dart';
+import 'split_select_members.dart';
 
 class SplitScreen extends StatefulWidget {
-  const SplitScreen({super.key});
+  final ReceiptData? initialReceipt;
+  const SplitScreen({super.key, this.initialReceipt});
 
   @override
   State<SplitScreen> createState() => _SplitScreenState();
@@ -22,79 +18,69 @@ class SplitScreen extends StatefulWidget {
 class _SplitScreenState extends State<SplitScreen> {
   final List<SplitParticipant> _participants = <SplitParticipant>[];
   bool _equalSplit = true;
-  bool _isScanning = false;
   ReceiptData? _scannedReceipt;
-  final SplitRepository _repo = SplitRepository();
-  final DebtRepository _debtRepo = DebtRepository();
 
-  void _addParticipant() async {
-    final SplitParticipant? p = await showDialog<SplitParticipant>(
-      context: context,
-      builder: (BuildContext context) => _ParticipantDialog(equalMode: _equalSplit),
-    );
-    if (p != null) {
-      setState(() {
-        _participants.add(p);
-      });
-    }
-  }
+  final NumberFormat _numFmt = NumberFormat.decimalPattern('id_ID');
 
-  void _editParticipant(int index) async {
-    final SplitParticipant current = _participants[index];
-    final SplitParticipant? p = await showDialog<SplitParticipant>(
-      context: context,
-      builder: (BuildContext context) => _ParticipantDialog(
-        equalMode: _equalSplit,
-        initial: current,
-      ),
-    );
-    if (p != null) {
-      setState(() {
-        _participants[index] = p.copyWith(id: current.id);
-      });
-    }
-  }
-
-  Future<void> _scanReceipt() async {
-    setState(() => _isScanning = true);
-    
+  Future<void> _uploadAgain() async {
     try {
       final ImagePicker picker = ImagePicker();
-      final XFile? image = await picker.pickImage(source: ImageSource.camera);
-      
-      if (image != null) {
-        final ReceiptData? receipt = await ReceiptScanner.scanReceipt(image.path);
-        if (receipt != null) {
-          setState(() {
-            _scannedReceipt = receipt;
-            _participants.clear();
-            // Auto-add the person who paid
-            _participants.add(SplitParticipant(
-              id: const Uuid().v4(),
-              name: 'Saya',
-              paidAmount: receipt.total,
-              shareWeight: 1.0,
-            ));
-          });
-        }
+  final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+      if (image == null) return;
+  final ReceiptData? receipt = await ReceiptScanner.scanReceiptFromXFile(image);
+      if (receipt != null) {
+        setState(() {
+          // attach image path on returned receipt (scanReceipt already sets imagePath)
+          _scannedReceipt = receipt;
+          _participants.clear();
+          _participants.add(SplitParticipant(id: const Uuid().v4(), name: 'Saya', paidAmount: receipt.total, shareWeight: 1.0));
+        });
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tidak dapat membaca struk')));
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error scanning receipt: $e')),
-        );
-      }
-    } finally {
-      setState(() => _isScanning = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
+  }
+
+  Map<String, String?> _parseItemLine(String line) {
+  // Find last number in the string
+    final Iterable<RegExpMatch> matches = RegExp(r'([0-9]+[.,0-9]*)').allMatches(line);
+    if (matches.isEmpty) return {'name': line, 'price': null};
+    final RegExpMatch m = matches.last;
+    String numStr = m.group(0) ?? '';
+    final String name = line.substring(0, m.start).trim();
+    // normalize numeric string to integer-like
+    final String digits = numStr.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) return {'name': line, 'price': null};
+    final double value = double.tryParse(digits) ?? 0.0;
+    final String formatted = _numFmt.format(value);
+    return {'name': name, 'price': formatted};
   }
 
   @override
+  void initState() {
+    super.initState();
+    // If screen opened with an initial scanned receipt, prefill
+    if (widget.initialReceipt != null) {
+      _scannedReceipt = widget.initialReceipt;
+      _participants.clear();
+      _participants.add(SplitParticipant(
+        id: const Uuid().v4(),
+        name: 'Saya',
+        paidAmount: _scannedReceipt!.total,
+        shareWeight: 1.0,
+      ));
+    }
+  }
+
+  // Note: scan/add/edit participant flows removed to keep this screen trimmed to the post-scan UI.
+
+  @override
   Widget build(BuildContext context) {
-    final SplitResult result = SplitCalculator.calculate(
-      participants: _participants,
-      equalSplit: _equalSplit,
-    );
+    // ensure initial receipt is picked up
 
     return Scaffold(
       body: CustomScrollView(
@@ -118,305 +104,155 @@ class _SplitScreenState extends State<SplitScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  // Receipt Scanner Card
+                  // Post-scan UI (show detailed mockup-style layout) - trimmed to only show until Confirm button
                   if (_scannedReceipt != null) ...[
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(Icons.receipt, color: Theme.of(context).colorScheme.primary),
-                                const SizedBox(width: 8),
-                                Text(
-                                  'Receipt Scanned',
-                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    color: Theme.of(context).colorScheme.primary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
+                    // Name input
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Theme.of(context).colorScheme.primary.withOpacity(0.4)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Nama split bill', style: TextStyle(fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: TextEditingController(text: _scannedReceipt!.merchant),
+                            decoration: const InputDecoration(
+                              hintText: 'Sinar Utama',
+                              border: InputBorder.none,
+                              isDense: true,
                             ),
-                            const SizedBox(height: 8),
-                            Text('Merchant: ${_scannedReceipt!.merchant}'),
-                            Text('Total: Rp ${_scannedReceipt!.total.toStringAsFixed(0)}'),
-                            if (_scannedReceipt!.items.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              Text('Items: ${_scannedReceipt!.items.length} items found'),
-                            ],
-                          ],
-                        ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Uploaded receipt card (purple)
+                    Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary.withOpacity(0.95),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text('Struk berhasil diupload!', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white, fontWeight: FontWeight.w600)),
+                          ),
+                          const SizedBox(height: 8),
+                          const Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text('Klik gambar di bawah agar tampilan struk lebih jelas.', style: TextStyle(color: Colors.white70)),
+                          ),
+                          const SizedBox(height: 12),
+                          if (_scannedReceipt!.imagePath != null)
+                            Container(
+                              width: 92,
+                              height: 92,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(8),
+                                color: Colors.white,
+                                image: DecorationImage(image: FileImage(File(_scannedReceipt!.imagePath!)), fit: BoxFit.cover),
+                              ),
+                            )
+                          else
+                            Container(
+                              width: 92,
+                              height: 92,
+                              decoration: BoxDecoration(borderRadius: BorderRadius.circular(8), color: Colors.white24),
+                              child: const Icon(Icons.receipt_long, color: Colors.white70, size: 48),
+                            ),
+                          const SizedBox(height: 12),
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              foregroundColor: Theme.of(context).colorScheme.primary,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                            onPressed: _uploadAgain,
+                            icon: const Icon(Icons.upload_file, size: 16),
+                            label: const Text('Upload ulang'),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 16),
-                  ],
-                  
-                  // Action Buttons
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _isScanning ? null : _scanReceipt,
-                          icon: _isScanning 
-                            ? SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Icon(Icons.camera_alt),
-                          label: Text(_isScanning ? 'Scanning...' : 'Scan Receipt'),
-                        ),
+
+                    // Itemized details card (compact)
+                    Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary.withOpacity(0.95),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _addParticipant,
-                          icon: const Icon(Icons.person_add),
-                          label: const Text('Add Person'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    _equalSplit ? 'Mode: Equal Split' : 'Mode: Custom Portions',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.primary.withOpacity(0.7),
-                    ),
-                  ),
-                  Row(
-                    children: <Widget>[
-                      const Spacer(),
-                      IconButton(
-                        tooltip: 'Simpan Sesi',
-                        icon: const Icon(Icons.save),
-                        onPressed: () async {
-                          if (_participants.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Belum ada peserta')));
-                            return;
-                          }
-                          final SplitSession session = SplitSession(
-                            id: const Uuid().v4(),
-                            createdAt: DateTime.now(),
-                            equalSplit: _equalSplit,
-                            participants: List<SplitParticipant>.from(_participants),
-                          );
-                          await _repo.saveSession(session);
-                          // Auto-create debts from current settlements
-                          await _debtRepo.init();
-                          for (final Settlement s in result.settlements) {
-                            final String from = _participants.firstWhere((p) => p.id == s.fromParticipantId).name;
-                            final String to = _participants.firstWhere((p) => p.id == s.toParticipantId).name;
-                            final DebtItem d = DebtItem(
-                              id: const Uuid().v4(),
-                              fromName: from,
-                              toName: to,
-                              amount: s.amount,
-                              createdAt: DateTime.now(),
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ..._scannedReceipt!.items.map((line) {
+                            final parsed = _parseItemLine(line);
+                            return Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(child: Text(parsed['name'] ?? line, style: const TextStyle(color: Colors.white))),
+                                    const SizedBox(width: 8),
+                                    Text(parsed['price'] != null ? 'Rp ${parsed['price']}' : '', style: const TextStyle(color: Colors.white)),
+                                  ],
+                                ),
+                                const Divider(color: Colors.white24),
+                              ],
                             );
-                            await _debtRepo.add(d);
-                          }
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sesi tersimpan & utang dibuat')));
-                        },
-                      ),
-                      IconButton(
-                        tooltip: 'Riwayat',
-                        icon: const Icon(Icons.history),
-                        onPressed: () async {
-                          final List<SplitSession> sessions = _repo.getAllSessions();
-                          if (!context.mounted) return;
-                          await showModalBottomSheet<void>(
-                            context: context,
-                            builder: (BuildContext context) {
-                              return ListView(
-                                children: sessions.map((SplitSession s) {
-                                  return Dismissible(
-                                    key: ValueKey<String>(s.id),
-                                    background: Container(color: Colors.red),
-                                    onDismissed: (_) async => _repo.deleteSession(s.id),
-                                    child: ListTile(
-                                      title: Text('Sesi ${s.createdAt}'),
-                                      subtitle: Text(s.equalSplit ? 'Bagi Rata' : 'Bobot'),
-                                      onTap: () {
-                                        Navigator.pop(context);
-                                        setState(() {
-                                          _equalSplit = s.equalSplit;
-                                          _participants
-                                            ..clear()
-                                            ..addAll(s.participants);
-                                        });
-                                      },
-                                    ),
-                                  );
-                                }).toList(),
-                              );
-                            },
-                          );
-                        },
-                      ),
-                      IconButton(
-                        tooltip: 'Export CSV',
-                        icon: const Icon(Icons.file_download),
-                        onPressed: () async {
-                          if (_participants.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Belum ada data untuk diexport')));
-                            return;
-                          }
-                          final List<List<dynamic>> rows = <List<dynamic>>[
-                            <dynamic>['Nama', 'Sudah Bayar', 'Bobot', 'Owed', 'Net'],
-                            ..._participants.map((SplitParticipant p) {
-                              final double owed = result.owedByParticipant[p.id] ?? 0.0;
-                              final double net = result.netByParticipant[p.id] ?? 0.0;
-                              return <dynamic>[p.name, p.paidAmount, p.shareWeight, owed, net];
-                            }),
-                            <dynamic>[],
-                            <dynamic>['Settlement: from', 'to', 'amount'],
-                            ...result.settlements.map((s) {
-                              final String from = _participants.firstWhere((p) => p.id == s.fromParticipantId).name;
-                              final String to = _participants.firstWhere((p) => p.id == s.toParticipantId).name;
-                              return <dynamic>[from, to, s.amount];
-                            }),
-                          ];
-                          final String csv = const ListToCsvConverter().convert(rows);
-                          await Share.share(csv, subject: 'Split Bill Export');
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  ..._participants.asMap().entries.map((entry) {
-                    final int idx = entry.key;
-                    final SplitParticipant p = entry.value;
-                    return Card(
-                      child: ListTile(
-                        title: Text(p.name),
-                        subtitle: Text('Bayar: ${p.paidAmount.toStringAsFixed(2)} | Bobot: ${p.shareWeight.toStringAsFixed(2)}'),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.edit),
-                          onPressed: () => _editParticipant(idx),
-                        ),
-                      ),
-                    );
-                  }),
-                  const SizedBox(height: 16),
-                  Text('Total Bayar: ${_participants.fold<double>(0, (s, p) => s + p.paidAmount).toStringAsFixed(2)}',
-                      style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 16),
-                  Text('Hutang-Piutang (Net):', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  ...result.netByParticipant.entries.map((e) {
-                    final SplitParticipant? p = _participants.firstWhere((x) => x.id == e.key);
-                    final String name = p?.name ?? e.key;
-                    final double v = e.value;
-                    final String desc = v >= 0 ? 'Terima' : 'Bayar';
-                    return ListTile(
-                      dense: true,
-                      leading: Icon(v >= 0 ? Icons.arrow_downward : Icons.arrow_upward, color: v >= 0 ? Colors.green : Colors.red),
-                      title: Text(name),
-                      trailing: Text('$desc ${v.abs().toStringAsFixed(2)}'),
-                    );
-                  }).toList(),
-                  const SizedBox(height: 16),
-                  Text('Saran Pelunasan:', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  if (result.settlements.isEmpty)
-                    const Text('Semua sudah seimbang.')
-                  else
-                    ...result.settlements.map((s) {
-                      final String from = _participants.firstWhere((p) => p.id == s.fromParticipantId).name;
-                      final String to = _participants.firstWhere((p) => p.id == s.toParticipantId).name;
-                      final String message = PaymentHelper.settlementMessage(fromName: from, toName: to, amount: s.amount);
-                      return Card(
-                        child: ListTile(
-                          dense: false,
-                          leading: const Icon(Icons.payments),
-                          title: Text('$from ➜ $to'),
-                          subtitle: Text(s.amount.toStringAsFixed(2)),
-                          trailing: Wrap(
-                            spacing: 8,
-                            children: <Widget>[
-                              IconButton(
-                                tooltip: 'Buat Utang',
-                                icon: const Icon(Icons.add_task),
-                                onPressed: () async {
-                                  await _debtRepo.init();
-                                  final DebtItem d = DebtItem(
-                                    id: const Uuid().v4(),
-                                    fromName: from,
-                                    toName: to,
-                                    amount: s.amount,
-                                    createdAt: DateTime.now(),
-                                  );
-                                  await _debtRepo.add(d);
-                                  if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Utang dibuat dari settlement')));
-                                },
-                              ),
-                              IconButton(
-                                tooltip: 'QR',
-                                icon: const Icon(Icons.qr_code),
-                                onPressed: () {
-                                  showDialog<void>(
-                                    context: context,
-                                    builder: (BuildContext context) => AlertDialog(
-                                      title: const Text('QR Pembayaran (stub)'),
-                                      content: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: <Widget>[
-                                          QrImageView(
-                                            data: message,
-                                            version: QrVersions.auto,
-                                            size: 180,
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Text(message, textAlign: TextAlign.center),
-                                          const SizedBox(height: 8),
-                                          QrImageView(
-                                            data: 'QRIS:$to:${s.amount.toStringAsFixed(2)}',
-                                            version: QrVersions.auto,
-                                            size: 180,
-                                          ),
-                                          const Text('QRIS (stub)'),
-                                        ],
-                                      ),
-                                      actions: <Widget>[
-                                        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Tutup')),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                              IconButton(
-                                tooltip: 'Share',
-                                icon: const Icon(Icons.ios_share),
-                                onPressed: () => Share.share(message),
-                              ),
-                              PopupMenuButton<String>(
-                                tooltip: 'E-Wallet',
-                                onSelected: (String provider) async {
-                                  final Uri uri = PaymentHelper.buildStubEwalletUri(provider: provider, toName: to, amount: s.amount);
-                                  if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-                                    if (!context.mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Tidak bisa buka $provider')),
-                                    );
-                                  }
-                                },
-                                itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                                  const PopupMenuItem<String>(value: 'ovo', child: Text('Bayar via OVO (stub)')),
-                                  const PopupMenuItem<String>(value: 'dana', child: Text('Bayar via DANA (stub)')),
-                                  const PopupMenuItem<String>(value: 'linkaja', child: Text('Bayar via LinkAja (stub)')),
-                                ],
-                                icon: const Icon(Icons.account_balance_wallet),
-                              ),
+                          }).toList(),
+
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Subtotal', style: TextStyle(color: Colors.white70)),
+                              Text('Rp ${_scannedReceipt!.total.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white)),
                             ],
                           ),
-                        ),
-                      );
-                    }),
+                          const SizedBox(height: 8),
+                          // Edit detail button (no-op)
+                          Center(
+                            child: TextButton.icon(
+                              onPressed: () {},
+                              icon: const Icon(Icons.edit, color: Colors.white70),
+                              label: const Text('Edit Detail', style: TextStyle(color: Colors.white70)),
+                              style: TextButton.styleFrom(backgroundColor: Colors.white24, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Confirm button
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF24C35E), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24))),
+                        onPressed: () async {
+                          // Navigate to member selection for this scanned receipt
+                          if (_scannedReceipt == null) return;
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => SplitSelectMembersScreen(receipt: _scannedReceipt!)));
+                        },
+                        child: const Text('Konfirmasi'),
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+                  ],
                 ],
               ),
             ),
@@ -427,78 +263,5 @@ class _SplitScreenState extends State<SplitScreen> {
   }
 }
 
-class _ParticipantDialog extends StatefulWidget {
-  final bool equalMode;
-  final SplitParticipant? initial;
-
-  const _ParticipantDialog({required this.equalMode, this.initial});
-
-  @override
-  State<_ParticipantDialog> createState() => _ParticipantDialogState();
-}
-
-class _ParticipantDialogState extends State<_ParticipantDialog> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _paidController = TextEditingController(text: '0');
-  final TextEditingController _weightController = TextEditingController(text: '1');
-
-  @override
-  void initState() {
-    super.initState();
-    final SplitParticipant? init = widget.initial;
-    if (init != null) {
-      _nameController.text = init.name;
-      _paidController.text = init.paidAmount.toString();
-      _weightController.text = init.shareWeight.toString();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.initial == null ? 'Tambah Orang' : 'Ubah Data'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(labelText: 'Nama'),
-          ),
-          TextField(
-            controller: _paidController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Sudah Bayar'),
-          ),
-          if (!widget.equalMode)
-            TextField(
-              controller: _weightController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Bobot Porsi'),
-            ),
-        ],
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Batal'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final String name = _nameController.text.trim().isEmpty ? 'Orang' : _nameController.text.trim();
-            final double paid = double.tryParse(_paidController.text.replaceAll(',', '.')) ?? 0.0;
-            final double weight = widget.equalMode ? 1.0 : (double.tryParse(_weightController.text.replaceAll(',', '.')) ?? 1.0);
-            final SplitParticipant p = SplitParticipant(
-              id: widget.initial?.id ?? const Uuid().v4(),
-              name: name,
-              paidAmount: paid < 0 ? 0 : paid,
-              shareWeight: weight <= 0 ? 1.0 : weight,
-            );
-            Navigator.pop(context, p);
-          },
-          child: const Text('Simpan'),
-        ),
-      ],
-    );
-  }
-}
+// Participant dialog removed because this trimmed screen only shows scanned receipt -> confirm flow.
 

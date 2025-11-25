@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../core/theme/app_theme.dart';
-import '../split/split_screen.dart';
-import '../debt/debt_screen.dart';
-import '../expense/expense_screen.dart';
-import '../budget/budget_screen.dart';
+import '../split/split_home.dart';
 import '../budget/repository.dart';
 import '../expense/repository.dart';
 import '../budget/models.dart';
 import '../expense/models.dart';
+import '../expense/expense_screen.dart';
+import '../budget/budget_planner_screen.dart';
+import '../goals/goal_saving.dart'; 
 import 'package:intl/intl.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -18,24 +18,9 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class MonasApp extends StatelessWidget {
-  final String initialRoute;
-  const MonasApp({super.key, required this.initialRoute});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'MONAS',
-      initialRoute: initialRoute,
-      routes: {
-        '/home': (_) => const HomeScreen(),
-      },
-    );
-  }
-}
-
-
 class _HomeScreenState extends State<HomeScreen> {
+  final ScrollController _scrollController = ScrollController(); 
+
   int _currentIndex = 0;
   bool _hideTotal = false;
   bool _hideRecords = false;
@@ -63,28 +48,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final DateTime now = DateTime.now();
 
-    // Total income dan outcome
-_totalIncome = budgets.fold(0.0, (sum, item) => sum + item.monthlyLimit);
-_totalOutcome = expenses.fold(0.0, (sum, item) => sum + item.amount); // expenseItem nanti tetap pakai amount
+    _totalIncome = budgets.fold(0.0, (sum, item) => sum + item.monthlyLimit);
+    _totalOutcome = expenses.fold(0.0, (sum, item) => sum + item.amount);
 
-// Bulan ini
-_monthIncome = budgets
-    .where((b) => b.createdAt.month == now.month && b.createdAt.year == now.year)
-    .fold(0.0, (sum, item) => sum + item.monthlyLimit);
-_monthOutcome = expenses
-    .where((e) => e.date.month == now.month && e.date.year == now.year)
-    .fold(0.0, (sum, item) => sum + item.amount);
+    _monthIncome = budgets
+        .where((b) => b.createdAt.month == now.month && b.createdAt.year == now.year)
+        .fold(0.0, (sum, item) => sum + item.monthlyLimit);
 
+    _monthOutcome = expenses
+        .where((e) => e.date.month == now.month && e.date.year == now.year)
+        .fold(0.0, (sum, item) => sum + item.amount);
+
+    setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6FF),
+
+      // ===== BODY (SCROLL) =====
       body: SingleChildScrollView(
+        controller: _scrollController, 
         child: Column(
           children: [
-            // === HEADER SECTION ===
+            // ========== HEADER ==========
             Container(
               width: double.infinity,
               padding: const EdgeInsets.only(top: 48, left: 20, right: 20, bottom: 24),
@@ -99,7 +87,6 @@ _monthOutcome = expenses
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Row atas: Welcome + notif + profil
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -128,7 +115,7 @@ _monthOutcome = expenses
                   ),
                   const SizedBox(height: 16),
 
-                  // Total
+                  // ========== TOTAL ==========
                   Container(
                     width: double.infinity,
                     decoration: BoxDecoration(
@@ -167,7 +154,7 @@ _monthOutcome = expenses
                   ),
                   const SizedBox(height: 10),
 
-                  // Badge
+                  // ========== BADGE ==========
                   Container(
                     decoration: BoxDecoration(
                       color: const Color(0xFFFDEADE),
@@ -180,7 +167,7 @@ _monthOutcome = expenses
                         SizedBox(width: 8),
                         Expanded(
                             child: Text(
-                                'Hemat Champion!  Kamu hemat 7 hari berturut-turut.',
+                                'Hemat Champion! Kamu hemat 7 hari berturut-turut.',
                                 style: TextStyle(fontSize: 12))),
                       ],
                     ),
@@ -191,7 +178,7 @@ _monthOutcome = expenses
 
             const SizedBox(height: 12),
 
-            // === SEARCH BAR ===
+            // ===== SEARCH BAR =====
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: TextField(
@@ -210,7 +197,7 @@ _monthOutcome = expenses
 
             const SizedBox(height: 16),
 
-            // === FEATURE GRID 2x3 ===
+            // ========= FEATURE GRID =========
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: GridView.count(
@@ -220,11 +207,19 @@ _monthOutcome = expenses
                 crossAxisSpacing: 16,
                 mainAxisSpacing: 16,
                 children: [
-                  _featureTile(Icons.account_balance_wallet, 'Budget Planner'),
+                  _featureTile(Icons.account_balance_wallet, 'Budget Planner', onTap: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const BudgetPlannerScreen()));
+                  }),
                   _featureTile(Icons.handshake, 'Debt & Loan Tracker'),
-                  _featureTile(Icons.wallet, 'Expense Tracker'),
-                  _featureTile(Icons.receipt_long, 'Split Bill'),
-                  _featureTile(Icons.savings, 'Goal Saving'),
+                  _featureTile(Icons.wallet, 'Expense Tracker', onTap: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const ExpenseScreen()));
+                  }),
+                  _featureTile(Icons.receipt_long, 'Split Bill', onTap: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const SplitHomeScreen()));
+                  }),
+                  _featureTile(Icons.savings, 'Goal Saving', onTap: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const GoalSavingScreen()));
+                  }),
                   _featureTile(Icons.insights, 'Insights'),
                 ],
               ),
@@ -232,7 +227,7 @@ _monthOutcome = expenses
 
             const SizedBox(height: 20),
 
-            // === RECORDS SUMMARY ===
+            // ===== RECORDS SUMMARY =====
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Card(
@@ -265,7 +260,6 @@ _monthOutcome = expenses
                       ),
                       const SizedBox(height: 12),
 
-                      // Income - Outcome horizontal
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -292,7 +286,6 @@ _monthOutcome = expenses
                       ),
 
                       const SizedBox(height: 16),
-
                       SizedBox(height: 120, child: _miniLineChart()),
                       const SizedBox(height: 8),
                       Text(
@@ -310,15 +303,30 @@ _monthOutcome = expenses
         ),
       ),
 
+      // FLOATING BUTTON → Split Bill
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFF696FC7),
-        onPressed: () {},
-        child: const Icon(Icons.shopping_bag),
+        onPressed: () {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => const SplitHomeScreen()));
+        },
+        child: const Icon(Icons.add),
       ),
+
+      // ===== BOTTOM NAV =====
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
-        onDestinationSelected: (int index) => setState(() => _currentIndex = index),
+        onDestinationSelected: (int index) {
+          if (index == 0) {
+            // JIKA TEKAN ICON HOME → SCROLL KE ATAS
+            _scrollController.animateTo(
+              0,
+              duration: const Duration(milliseconds: 400),
+              curve: Curves.easeOut,
+            );
+          }
+          setState(() => _currentIndex = index);
+        },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.receipt_long), label: 'Invoice'),
@@ -329,26 +337,30 @@ _monthOutcome = expenses
     );
   }
 
-  // === Widgets ===
+  // ===== WIDGETS (Tidak ada perubahan di sini) =====
 
-  Widget _featureTile(IconData icon, String label) {
-    return Column(
-      children: [
-        Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: const [
-              BoxShadow(color: Color(0x14000000), blurRadius: 8, offset: Offset(0, 4)),
-            ],
+  Widget _featureTile(IconData icon, String label, {VoidCallback? onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: const [
+                BoxShadow(color: Color(0x14000000), blurRadius: 8, offset: Offset(0, 4)),
+              ],
+            ),
+            child: Icon(icon, color: AppTheme.primary),
           ),
-          child: Icon(icon, color: AppTheme.primary),
-        ),
-        const SizedBox(height: 6),
-        Text(label, style: const TextStyle(fontSize: 10), textAlign: TextAlign.center),
-      ],
+          const SizedBox(height: 6),
+          Text(label, style: const TextStyle(fontSize: 10), textAlign: TextAlign.center),
+        ],
+      ),
     );
   }
 
